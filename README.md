@@ -9,6 +9,13 @@ you have open in your browser.
   the pick-and-place file.
 - It serves on `127.0.0.1` only.
 
+![pcb-viewer showing the Arduino UNO R4 Minima's top copper, with the SWDIO net traced in magenta and callouts on the SWD header and the MCU](docs/screenshot.png)
+
+*The [example board](#try-it-on-the-arduino-uno-r4-minima) after
+`pcb-viewer trace --ref SWDIO1` and
+`pcb-viewer mark J2="SWD header" U1="RA4M1 MCU" --no-fit`: the debug net runs
+from its test point on the bottom, through a via, to the MCU and the header.*
+
 ## Requirements
 
 - Python 3 (developed on 3.12). Viewing and search use only the standard
@@ -17,6 +24,10 @@ you have open in your browser.
 - For copper tracing: numpy, scipy and Pillow (`pip install numpy scipy Pillow`).
 - For netlists from an Altium Smart PDF: `pdftohtml` from poppler
   (`sudo apt install poppler-utils`).
+
+Developed and tested on Linux. On macOS, Homebrew has both tools
+(`brew install gerbv poppler`), but that setup is untested. Windows is
+untested.
 
 Run it as `python3 pcbview.py ...`, or link it onto your PATH as `pcb-viewer`:
 
@@ -145,6 +156,9 @@ renders in `~/.cache/pcb-viewer/<name>/`. Restart `serve` after `add`.
 
 ## License
 
-MIT, see [LICENSE](LICENSE). The Arduino design files used in the example
-belong to Arduino, are licensed CC BY-SA 4.0, and are not part of this
-repository.
+The code is MIT, see [LICENSE](LICENSE).
+
+The Arduino design files used in the example belong to Arduino and are
+licensed [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/); they
+are not part of this repository. `docs/screenshot.png` shows that design, so it
+is licensed CC BY-SA 4.0 too, with credit to Arduino.
