@@ -1,0 +1,587 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PCB Viewer</title>
+<style>
+:root {
+  --bg: #0c0d0f; --panel: #1b1e23; --line: #2c3036; --fg: #e6e6e6; --mut: #9aa0a6;
+  --acc: #39c5ff; --hit: #ff9f1a;
+}
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+  font: 13px/1.35 system-ui, -apple-system, "Segoe UI", sans-serif; }
+#app { display: flex; height: 100%; }
+#side { width: 320px; min-width: 320px; background: var(--panel); border-right: 1px solid var(--line);
+  display: flex; flex-direction: column; }
+#side header { padding: 10px 12px; border-bottom: 1px solid var(--line); display: flex; gap: 8px; align-items: center; }
+#side header select { flex: 1; min-width: 0; }
+select, input, button { background: #111317; color: var(--fg); border: 1px solid var(--line);
+  border-radius: 4px; padding: 5px 7px; font: inherit; }
+button { cursor: pointer; }
+button.on { border-color: var(--acc); color: var(--acc); }
+.row { display: flex; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--line); align-items: center; }
+#q { flex: 1; }
+#results { max-height: 30%; overflow: auto; border-bottom: 1px solid var(--line); }
+#results div { padding: 3px 12px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#results div:hover, #results div.cur { background: #262a31; }
+#results .ref { color: var(--hit); display: inline-block; min-width: 72px; }
+#results .net { color: #7ee07e; display: inline-block; min-width: 72px; }
+#info a { color: #7ee07e; cursor: pointer; text-decoration: none; }
+#info a.part { color: var(--hit); }
+#info .pins { max-height: 180px; overflow: auto; margin-top: 4px; font: 12px ui-monospace, monospace; }
+#results .mut, .mut { color: var(--mut); }
+#layers { flex: 1; overflow: auto; padding: 6px 0; }
+#layers label { display: flex; gap: 8px; align-items: center; padding: 2px 12px; cursor: pointer; }
+#layers .sw { width: 12px; height: 12px; border-radius: 2px; border: 1px solid #0006; flex: none; }
+#layers .grp { color: var(--mut); padding: 6px 12px 2px; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+#info { padding: 8px 12px; border-top: 1px solid var(--line); min-height: 64px; }
+#info b { color: var(--acc); }
+#view { flex: 1; position: relative; overflow: hidden; cursor: grab; background: #08090a; }
+#view.drag { cursor: grabbing; }
+#board { position: absolute; left: 0; top: 0; transform-origin: 0 0; background: #101a12; }
+#flip { position: absolute; inset: 0; }
+#flip.mirror { transform: scaleX(-1); }
+#flip img, #flip svg { position: absolute; left: 0; top: 0; width: 100%; height: 100%; }
+#flip img { pointer-events: none; user-select: none; }
+#parts { pointer-events: none; overflow: visible; z-index: 1000; }
+#parts circle { pointer-events: auto; cursor: pointer; }
+#parts .p { fill: #ffffff30; stroke: #ffffffa0; }
+#parts .p.hit { fill: #ff9f1a80; stroke: var(--hit); }
+#parts .p.sel { fill: #39c5ff90; stroke: var(--acc); }
+#parts text { fill: #ffffffd0; paint-order: stroke; stroke: #000;
+  pointer-events: none; display: none; }
+#parts.labels text { display: block; }
+#parts text.hit { fill: var(--hit); display: block; }
+#parts text.sel { fill: var(--acc); display: block; font-weight: 700; }
+#parts .ring { fill: none; stroke: var(--acc); animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 50% { stroke-opacity: .25; } }
+#parts .mk-ring { fill: none; }
+#parts .mk-lead { fill: none; }
+#parts .mk-text { font-weight: 700; paint-order: stroke; stroke: #000; display: block; }
+#hud { position: absolute; left: 10px; bottom: 8px; background: #000a; padding: 4px 8px; border-radius: 4px;
+  font: 12px ui-monospace, monospace; pointer-events: none; }
+#toast { position: absolute; right: 12px; top: 10px; background: #000c; border: 1px solid var(--acc);
+  color: var(--fg); padding: 6px 10px; border-radius: 4px; display: none; }
+#flip img.trace { pointer-events: none; image-rendering: pixelated; }
+#info .tl { font: 12px ui-monospace, monospace; }
+#help { color: var(--mut); font-size: 11px; padding: 6px 12px 10px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <aside id="side">
+    <header>
+      <select id="boardSel" title="Board"></select>
+      <button id="btnTop" class="on" title="View top (T)">Top</button>
+      <button id="btnBot" title="View bottom, mirrored as seen from below (B)">Bottom</button>
+    </header>
+    <div class="row">
+      <input id="q" placeholder="Search part, value, footprint, net  ( / )" autocomplete="off">
+      <button id="btnFit" title="Fit board (F)">Fit</button>
+    </div>
+    <div id="results"></div>
+    <div id="layers"></div>
+    <div id="info"><span class="mut">Click a part or search.</span></div>
+    <div id="help">Drag to pan, wheel to zoom. Double-click copper to trace everything connected to it (all layers,
+      through vias). Enter focuses the first result; Shift+Enter all of them. Esc clears highlights and traces.</div>
+  </aside>
+  <main id="view">
+    <div id="board"><div id="flip"><svg id="parts"></svg></div></div>
+    <div id="hud">–</div>
+    <div id="toast"></div>
+  </main>
+</div>
+<script>
+"use strict";
+const K = 10;                 // board px per mm at scale 1
+const $ = (id) => document.getElementById(id);
+const view = $("view"), board = $("board"), flip = $("flip"), partsSvg = $("parts");
+const SVGNS = "http://www.w3.org/2000/svg";
+
+let B = null;                 // current board meta
+let side = "top";
+let s = 1, tx = 0, ty = 0;    // view transform
+let vis = {};                 // layer id -> bool
+let hits = new Set(), sel = null;
+let partEls = {};             // ref -> {c, t}
+let imgs = {};                // layer id -> img
+
+// ---------- geometry ----------
+const W = () => B.bbox.w * K, H = () => B.bbox.h * K;
+function mmToBoard(x, y) {
+  let px = (x - B.bbox.x0) * K;
+  if (side === "bottom") px = W() - px;
+  return [px, (B.bbox.y0 + B.bbox.h - y) * K];
+}
+function screenToMm(cx, cy) {
+  const r = view.getBoundingClientRect();
+  let px = (cx - r.left - tx) / s, py = (cy - r.top - ty) / s;
+  if (side === "bottom") px = W() - px;
+  return [B.bbox.x0 + px / K, B.bbox.y0 + B.bbox.h - py / K];
+}
+function apply() {
+  board.style.transform = `translate(${tx}px,${ty}px) scale(${s})`;
+  partsSvg.classList.toggle("labels", s * K >= 14);
+  // keep labels and the focus ring a constant size on screen (units are mm)
+  const px = 1 / (s * K);
+  partsSvg.style.fontSize = Math.min(.6, 12 * px) + "px";
+  partsSvg.style.strokeWidth = Math.min(.12, 2.5 * px) + "px";
+  const ring = partsSvg.querySelector(".ring");
+  if (ring) { ring.setAttribute("r", Math.max(.5, 22 * px)); ring.setAttribute("stroke-width", Math.max(.05, 3 * px)); }
+  renderMarks();
+  reportView();
+}
+function fit() {
+  const vw = view.clientWidth, vh = view.clientHeight;
+  s = Math.min(vw / W(), vh / H()) * 0.95;
+  tx = (vw - W() * s) / 2; ty = (vh - H() * s) / 2;
+  apply();
+}
+function centerOn(x, y, windowMm) {
+  const vw = view.clientWidth, vh = view.clientHeight;
+  s = Math.min(vw, vh) / (windowMm * K);
+  const [px, py] = mmToBoard(x, y);
+  tx = vw / 2 - px * s; ty = vh / 2 - py * s;
+  apply();
+}
+
+// ---------- layers ----------
+function zFor(l) {
+  const own = l.side === side;
+  if (l.kind === "copper") return l.side === "inner" ? 20 + l.inner : own ? 40 : 10;
+  if (l.kind === "mask") return own ? 50 : 5;
+  if (l.kind === "paste") return own ? 55 : 5;
+  if (l.kind === "silk") return own ? 60 : 5;
+  return { drill: 70, outline: 80, mech: 85 }[l.kind] || 90;
+}
+function defaultVis(l) {
+  if (!l.default_visible) return false;
+  if (["copper", "silk"].includes(l.kind)) return l.side === side;
+  return true;
+}
+function setLayer(l, on) {
+  vis[l.id] = on;
+  let img = imgs[l.id];
+  if (on && !img) {
+    img = imgs[l.id] = document.createElement("img");
+    img.src = `/layers/${B.name}/${l.file}`;
+    img.alt = l.label;
+    flip.insertBefore(img, partsSvg);
+  }
+  if (img) { img.style.display = on ? "" : "none"; img.style.zIndex = zFor(l); }
+  const cb = document.querySelector(`#layers input[data-id="${l.id}"]`);
+  if (cb) cb.checked = on;
+}
+function buildLayerList() {
+  const box = $("layers");
+  box.innerHTML = "";
+  const groups = [["Copper", "copper"], ["Silkscreen", "silk"], ["Solder mask", "mask"], ["Paste", "paste"],
+                  ["Outline", "outline"], ["Drill", "drill"], ["Mechanical", "mech"]];
+  for (const [title, kind] of groups) {
+    const ls = B.layers.filter((l) => l.kind === kind);
+    if (!ls.length) continue;
+    const g = document.createElement("div");
+    g.className = "grp"; g.textContent = title; box.append(g);
+    for (const l of ls) {
+      const lab = document.createElement("label");
+      const cb = document.createElement("input");
+      cb.type = "checkbox"; cb.dataset.id = l.id;
+      cb.onchange = () => setLayer(l, cb.checked);
+      const sw = document.createElement("span");
+      sw.className = "sw"; sw.style.background = "#" + l.color.slice(1, 7);
+      const tx_ = document.createElement("span");
+      tx_.textContent = l.label + (l.side && l.side !== "inner" && kind !== "copper" ? "" : "");
+      lab.append(cb, sw, tx_); box.append(lab);
+    }
+  }
+}
+function applySideDefaults() {
+  for (const l of B.layers) setLayer(l, defaultVis(l));
+}
+
+// ---------- parts ----------
+function buildParts() {
+  partsSvg.innerHTML = ""; partEls = {};
+  const { x0, y0, w, h } = B.bbox;
+  partsSvg.setAttribute("viewBox", `${x0} ${-(y0 + h)} ${w} ${h}`);
+  partsSvg.setAttribute("preserveAspectRatio", "none");
+  for (const p of B.parts) {
+    const c = document.createElementNS(SVGNS, "circle");
+    c.setAttribute("cx", p.x); c.setAttribute("cy", -p.y); c.setAttribute("r", .28);
+    c.setAttribute("stroke-width", .06);
+    c.classList.add("p");
+    const tt = document.createElementNS(SVGNS, "title");
+    tt.textContent = `${p.ref}  ${p.val}  ${p.fp}`;
+    c.append(tt);
+    c.addEventListener("click", (e) => { e.stopPropagation(); select(p, false); });
+    const t = document.createElementNS(SVGNS, "text");
+    t.textContent = p.ref;
+    partsSvg.append(c, t);
+    partEls[p.ref] = { c, t, p };
+  }
+  placeLabels();
+  showSideParts();
+}
+function placeLabels() {
+  // Labels stay readable when the bottom view mirrors the board.
+  for (const { t, p } of Object.values(partEls)) {
+    const m = side === "bottom" ? " scale(-1,1)" : "";
+    t.setAttribute("transform", `translate(${p.x},${-p.y})${m}`);
+    t.setAttribute("dx", ".45em"); t.setAttribute("dy", ".35em");
+  }
+}
+function showSideParts() {
+  for (const { c, t, p } of Object.values(partEls)) {
+    const show = p.side === side || hits.has(p.ref);
+    c.style.display = t.style.display = show ? "" : "none";
+    if (p.side !== side) { c.style.opacity = .55; } else { c.style.opacity = 1; }
+  }
+}
+function markHits() {
+  for (const { c, t, p } of Object.values(partEls)) {
+    const h = hits.has(p.ref), sl = sel && sel.ref === p.ref;
+    c.classList.toggle("hit", h && !sl); c.classList.toggle("sel", !!sl);
+    t.classList.toggle("hit", h && !sl); t.classList.toggle("sel", !!sl);
+    c.setAttribute("r", sl ? .45 : h ? .38 : .28);
+  }
+  partsSvg.querySelectorAll(".ring").forEach((n) => n.remove());
+  if (sel) {
+    const r = document.createElementNS(SVGNS, "circle");
+    r.setAttribute("cx", sel.x); r.setAttribute("cy", -sel.y); r.setAttribute("r", 1.2);
+    r.setAttribute("stroke-width", .15); r.classList.add("ring");
+    partsSvg.append(r);
+  }
+  showSideParts();
+  apply();
+}
+function select(p, zoom = true) {
+  sel = p;
+  if (p.side !== side) setSide(p.side);
+  markHits();
+  const pins = Object.entries(p.nets || {}).sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }));
+  $("info").innerHTML = `<b>${esc(p.ref)}</b> &nbsp;${esc(p.val)}<br>` +
+    `<span class="mut">${esc(p.fp)}</span><br>${p.side}, x ${p.x.toFixed(3)} y ${p.y.toFixed(3)} mm, rot ${p.rot}°` +
+    (pins.length ? `<div class="pins">${pins.map(([n, net]) =>
+      `${esc(n.padEnd(4))} <a data-net="${esc(net)}">${esc(net)}</a>`).join("<br>")}</div>` : "");
+  if (zoom) centerOn(p.x, p.y, 8);
+  reportView();
+}
+function focusRefs(refs) {
+  const ps = refs.map((r) => partEls[r] && partEls[r].p).filter(Boolean);
+  if (!ps.length) return;
+  hits = new Set(ps.map((p) => p.ref));
+  if (ps.length === 1) return select(ps[0], true);
+  sel = null;
+  const onSide = ps.filter((p) => p.side === side);
+  if (!onSide.length) setSide(ps[0].side);
+  markHits();
+  const xs = ps.map((p) => p.x), ys = ps.map((p) => p.y);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  centerOn((x0 + x1) / 2, (y0 + y1) / 2, Math.max(x1 - x0, y1 - y0, 4) + 6);
+  $("info").innerHTML = `<b>${ps.length} parts</b> highlighted<br><span class="mut">${esc(ps.slice(0, 12).map((p) => p.ref).join(", "))}${ps.length > 12 ? " …" : ""}</span>`;
+}
+function focusNet(name) {
+  const n = B.nets && B.nets[name];
+  if (!n) return;
+  const refs = [...new Set(n.pins.map((pn) => pn.slice(0, pn.lastIndexOf("-"))))].filter((r) => partEls[r]);
+  focusRefs(refs);
+  if (refs.length === 1) { /* keep the net listing rather than the single part */ }
+  $("info").innerHTML = `Net <b>${esc(name)}</b> · ${n.pins.length} pins` +
+    (n.aliases.length ? `<br><span class="mut">aka ${esc(n.aliases.join(", "))}</span>` : "") +
+    (n.pages && n.pages.length ? `<br><span class="mut">schematic page ${n.pages.join(", ")}</span>` : "") +
+    `<div class="pins">${n.pins.map((pn) => { const r = pn.slice(0, pn.lastIndexOf("-"));
+      return partEls[r] ? `<a class="part" data-ref="${esc(r)}">${esc(pn)}</a>` : `<span class="mut">${esc(pn)}</span>`; }).join("  ")}</div>`;
+}
+$("info").addEventListener("click", (e) => {
+  const a = e.target.closest("a");
+  if (!a) return;
+  if (a.dataset.net) focusNet(a.dataset.net);
+  else if (a.dataset.ref && partEls[a.dataset.ref]) { hits = new Set([a.dataset.ref]); select(partEls[a.dataset.ref].p, true); }
+});
+function searchNets(q) {
+  q = q.trim().toLowerCase();
+  if (q.startsWith("net:")) q = q.slice(4).trim();
+  if (!q || !B.nets) return [];
+  const out = [];
+  for (const [name, n] of Object.entries(B.nets)) {
+    const names = [name, ...n.aliases].map((x) => x.toLowerCase());
+    const sc = names.includes(q) ? 100 : names.some((x) => x.startsWith(q)) ? 60 : names.some((x) => x.includes(q)) ? 30 : 0;
+    if (sc) out.push([sc, name]);
+  }
+  out.sort((a, b) => b[0] - a[0] || a[1].length - b[1].length || a[1].localeCompare(b[1]));
+  return out.slice(0, 30).map((x) => x[1]);
+}
+function clearHits() { hits = new Set(); sel = null; markHits(); $("info").innerHTML = '<span class="mut">Click a part or search.</span>'; }
+function esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+
+// ---------- copper trace ----------
+let traceImgs = [], lastTrace = null;
+function traceOpacity(l) {
+  if (l.side === side) return 0.95;          // outer layer of the side being viewed
+  if (l.side === "inner") return 0.5;
+  return 0.3;                               // the opposite outer layer
+}
+function styleTrace() {
+  for (const { img, l } of traceImgs) { img.style.opacity = traceOpacity(l); img.style.zIndex = l.side === side ? 95 : 45; }
+}
+function clearTrace() { traceImgs.forEach(({ img }) => img.remove()); traceImgs = []; lastTrace = null; }
+function showTrace(tr) {
+  clearTrace();
+  lastTrace = tr;
+  for (const l of tr.layers) {
+    const img = document.createElement("img");
+    img.className = "trace"; img.src = l.url; img.alt = "trace " + l.label;
+    flip.insertBefore(img, partsSvg);
+    traceImgs.push({ img, l });
+  }
+  styleTrace();
+  hits = new Set(tr.parts); sel = null; markHits();
+  const net = tr.likely_net;
+  $("info").innerHTML = `Trace from <b>${tr.seed.snapped[0]}, ${tr.seed.snapped[1]}</b> on ${esc(tr.seed.layer)}` +
+    (net ? `<br>likely net <a data-net="${esc(net)}">${esc(net)}</a>` : "") +
+    `<div class="tl">${tr.layers.map((l) => `${esc(l.label.padEnd(13))} ${l.area_mm2.toFixed(2)} mm²`).join("<br>")}</div>` +
+    `<div class="pins">${tr.parts.slice(0, 300).map((r) => `<a class="part" data-ref="${esc(r)}">${esc(r)}</a>`).join(" ")}</div>`;
+}
+async function requestTrace(x, y) {
+  toast("Tracing…");
+  const r = await fetch("/api/cmd", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "trace", board: B.name, x: +x.toFixed(4), y: +y.toFixed(4), side }) });
+  const res = await r.json();
+  if (!res.ok) toast(res.error || "trace failed");   // success arrives as a broadcast event
+}
+
+// ---------- callout marks ----------
+// marks: [{x, y, text, color, side}] drawn at a constant size on screen
+let marks = [];
+function renderMarks() {
+  partsSvg.querySelectorAll(".mk").forEach((n) => n.remove());
+  if (!marks.length) return;
+  const px = 1 / (s * K);                         // mm per screen pixel
+  const mirror = side === "bottom" ? " scale(-1,1)" : "";
+  // Lay out labels: marks closer than a label's width form a cluster; within a
+  // cluster, labels alternate left/right (by on-screen order) and stack in rows.
+  const scr = (m) => (side === "bottom" ? -1 : 1) * m.x;
+  const order = marks.map((m, i) => i).sort((a, b) => scr(marks[a]) - scr(marks[b]));
+  const layout = new Array(marks.length);
+  const gap = 240 * px;
+  let cluster = [];
+  const flush = () => {
+    cluster.forEach((idx, k) => {
+      const m = marks[idx];
+      const def = m.x > B.bbox.x0 + B.bbox.w / 2 ? 1 : -1;
+      const onScreen = cluster.length === 1 ? (side === "bottom" ? -def : def) : (k % 2 === 0 ? -1 : 1);
+      layout[idx] = { sx: side === "bottom" ? -onScreen : onScreen, tier: Math.floor(k / 2) };
+    });
+    cluster = [];
+  };
+  for (const idx of order) {
+    if (cluster.length && Math.abs(scr(marks[idx]) - scr(marks[cluster[cluster.length - 1]])) > gap) flush();
+    cluster.push(idx);
+  }
+  flush();
+  marks.forEach((m, idx) => { m._sx = layout[idx].sx; m._tier = layout[idx].tier; });
+  for (const m of marks) {
+    const g = document.createElementNS(SVGNS, "g");
+    g.classList.add("mk");
+    g.style.opacity = m.side && m.side !== side ? 0.45 : 1;
+    const ring = document.createElementNS(SVGNS, "circle");
+    ring.setAttribute("cx", m.x); ring.setAttribute("cy", -m.y); ring.setAttribute("r", Math.max(.35, 14 * px));
+    ring.setAttribute("stroke", m.color); ring.setAttribute("stroke-width", 3 * px); ring.classList.add("mk-ring");
+    const sx = m._sx;
+    const lx = m.x + sx * 34 * px, ly = -m.y - (34 + m._tier * 30) * px;
+    const lead = document.createElementNS(SVGNS, "polyline");
+    lead.setAttribute("points", `${m.x + sx * 10 * px},${-m.y - 10 * px} ${lx},${ly} ${lx + sx * 16 * px},${ly}`);
+    lead.setAttribute("stroke", m.color); lead.setAttribute("stroke-width", 2 * px); lead.classList.add("mk-lead");
+    const t = document.createElementNS(SVGNS, "text");
+    t.textContent = m.text; t.classList.add("mk-text");
+    t.setAttribute("fill", m.color);
+    t.setAttribute("font-size", 17 * px); t.setAttribute("stroke-width", 3.5 * px);
+    const anchorRight = (sx < 0) !== (side === "bottom");
+    t.setAttribute("text-anchor", anchorRight ? "end" : "start");
+    t.setAttribute("transform", `translate(${lx + sx * 20 * px},${ly + 6 * px})${mirror}`);
+    g.append(ring, lead, t);
+    partsSvg.append(g);
+  }
+}
+
+// ---------- search ----------
+function search(q) {
+  q = q.trim().toLowerCase();
+  if (!q) return [];
+  const out = [];
+  for (const p of B.parts) {
+    const r = p.ref.toLowerCase(), v = p.val.toLowerCase(), f = p.fp.toLowerCase();
+    const sc = r === q ? 100 : r.startsWith(q) ? 60 : r.includes(q) ? 40 : v === q ? 30 : v.includes(q) ? 20 : f.includes(q) ? 10 : 0;
+    if (sc) out.push([sc, p]);
+  }
+  out.sort((a, b) => b[0] - a[0] || a[1].ref.length - b[1].ref.length || a[1].ref.localeCompare(b[1].ref));
+  return out.slice(0, 200).map((x) => x[1]);
+}
+let results = [], netResults = [];
+function showResults() {
+  const box = $("results");
+  const qv = $("q").value;
+  results = qv.trim().toLowerCase().startsWith("net:") ? [] : search(qv);
+  netResults = searchNets(qv);
+  box.innerHTML = "";
+  for (const name of netResults) {
+    const d = document.createElement("div");
+    d.innerHTML = `<span class="net">NET</span> ${esc(name)} <span class="mut">· ${B.nets[name].pins.length} pins</span>`;
+    d.onclick = () => focusNet(name);
+    box.append(d);
+  }
+  for (const p of results) {
+    const d = document.createElement("div");
+    d.innerHTML = `<span class="ref">${esc(p.ref)}</span> ${esc(p.val)} <span class="mut">${esc(p.fp)} · ${p.side}</span>`;
+    d.onclick = () => { hits = new Set([p.ref]); select(p, true); };
+    box.append(d);
+  }
+  hits = new Set(results.map((p) => p.ref));
+  markHits();
+}
+
+// ---------- side / board ----------
+function setSide(sd) {
+  if (sd === side) return;
+  const vw = view.clientWidth, vh = view.clientHeight;
+  const [cx, cy] = B ? screenToMm(view.getBoundingClientRect().left + vw / 2, view.getBoundingClientRect().top + vh / 2) : [0, 0];
+  const win = vw / (s * K);
+  side = sd;
+  flip.classList.toggle("mirror", side === "bottom");
+  $("btnTop").classList.toggle("on", side === "top");
+  $("btnBot").classList.toggle("on", side === "bottom");
+  applySideDefaults();
+  placeLabels();
+  showSideParts();
+  styleTrace();
+  if (B) { s = vw / (win * K); const [px, py] = mmToBoard(cx, cy); tx = vw / 2 - px * s; ty = vh / 2 - py * s; apply(); }
+}
+async function loadBoard(name) {
+  const r = await fetch(`/api/board?name=${encodeURIComponent(name)}`);
+  B = await r.json();
+  document.title = `${B.title} – PCB Viewer`;
+  location.hash = B.name;
+  $("boardSel").value = B.name;
+  board.style.width = W() + "px"; board.style.height = H() + "px";
+  flip.querySelectorAll("img").forEach((n) => n.remove());
+  imgs = {}; vis = {}; hits = new Set(); sel = null; traceImgs = []; lastTrace = null; marks = [];
+  buildLayerList();
+  applySideDefaults();
+  buildParts();
+  fit();
+}
+
+// ---------- remote control ----------
+let viewTimer = null;
+function reportView() {
+  if (!B) return;
+  clearTimeout(viewTimer);
+  viewTimer = setTimeout(() => {
+    const r = view.getBoundingClientRect();
+    const [cx, cy] = screenToMm(r.left + r.width / 2, r.top + r.height / 2);
+    fetch("/api/view", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ board: B.name, side, center: [+cx.toFixed(2), +cy.toFixed(2)],
+        window_mm: +(r.width / (s * K)).toFixed(1), selected: sel && sel.ref,
+        highlighted: [...hits].slice(0, 50), layers: B.layers.filter((l) => vis[l.id]).map((l) => l.label),
+        files: B.layers.filter((l) => vis[l.id]).map((l) => l.file),
+        trace: lastTrace ? lastTrace.id : null }) }).catch(() => {});
+  }, 300);
+}
+function toast(msg) {
+  const t = $("toast");
+  t.textContent = msg; t.style.display = "block";
+  clearTimeout(toast.h); toast.h = setTimeout(() => (t.style.display = "none"), 2500);
+}
+async function onCommand(m) {
+  if (m.board && B && m.board !== B.name) await loadBoard(m.board);
+  if (m.action === "focus" && m.net) { focusNet(m.net); toast(`Net ${m.net}`); }
+  else if (m.action === "focus") { focusRefs(m.refs); toast(`Focus: ${m.refs.slice(0, 6).join(", ")}${m.refs.length > 6 ? " …" : ""}`); }
+  else if (m.action === "goto") { if (m.side) setSide(m.side); centerOn(m.x, m.y, m.window || 10); toast(`Go to ${m.x}, ${m.y} mm`); }
+  else if (m.action === "side") setSide(m.side);
+  else if (m.action === "layer") {
+    const needle = String(m.match).toLowerCase();
+    for (const l of B.layers) if (l.label.toLowerCase().includes(needle) || l.kind === needle) setLayer(l, !!m.on);
+  }
+  else if (m.action === "trace") { showTrace(m.trace); toast(`Trace: ${m.trace.likely_net || m.trace.parts.length + " parts"}`); }
+  else if (m.action === "trace_clear") { clearTrace(); clearHits(); }
+  else if (m.action === "reload") location.reload();
+  else if (m.action === "mark") {
+    if (!m.append) marks = [];
+    marks.push(...m.marks);
+    if (m.fit !== false && marks.length) {
+      const xs = marks.map((k) => k.x), ys = marks.map((k) => k.y);
+      const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+      if (!marks.some((k) => k.side === side) && marks[0].side) setSide(marks[0].side);
+      centerOn((x0 + x1) / 2, (y0 + y1) / 2, Math.max(x1 - x0, y1 - y0, 3) * 1.6 + 6);
+    }
+    renderMarks();
+  }
+  else if (m.action === "unmark") { marks = []; renderMarks(); }
+  else if (m.action === "fit") fit();
+  else if (m.action === "clear") clearHits();
+}
+function connect() {
+  const es = new EventSource("/api/events");
+  es.onmessage = (e) => onCommand(JSON.parse(e.data));
+  es.onerror = () => { es.close(); setTimeout(connect, 2000); };
+}
+
+// ---------- input ----------
+let drag = null;
+view.addEventListener("mousedown", (e) => { if (e.button !== 0) return; drag = [e.clientX, e.clientY, tx, ty, false]; view.classList.add("drag"); });
+window.addEventListener("mousemove", (e) => {
+  if (B) { const [x, y] = screenToMm(e.clientX, e.clientY); $("hud").textContent = `x ${x.toFixed(2)}  y ${y.toFixed(2)} mm  ·  ${side}`; }
+  if (!drag) return;
+  tx = drag[2] + e.clientX - drag[0]; ty = drag[3] + e.clientY - drag[1];
+  drag[4] = true; apply();
+});
+window.addEventListener("mouseup", () => { drag = null; view.classList.remove("drag"); });
+view.addEventListener("dblclick", (e) => {
+  if (!B) return;
+  e.preventDefault();
+  const [x, y] = screenToMm(e.clientX, e.clientY);
+  requestTrace(x, y);
+});
+view.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  const r = view.getBoundingClientRect();
+  const cx = e.clientX - r.left, cy = e.clientY - r.top;
+  const f = Math.exp(-e.deltaY * 0.0015);
+  const ns = Math.min(Math.max(s * f, 0.05), 400);
+  tx = cx - (cx - tx) * (ns / s); ty = cy - (cy - ty) * (ns / s); s = ns;
+  apply();
+}, { passive: false });
+$("q").addEventListener("input", showResults);
+$("q").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && netResults.length && (!results.length || $("q").value.toLowerCase().startsWith("net:") ||
+      netResults[0].toLowerCase() === $("q").value.trim().toLowerCase())) { focusNet(netResults[0]); return; }
+  if (e.key === "Enter" && results.length) {
+    if (e.shiftKey) focusRefs(results.map((p) => p.ref)); else { hits = new Set([results[0].ref]); select(results[0], true); }
+  }
+  if (e.key === "Escape") { $("q").value = ""; showResults(); clearHits(); clearTrace(); marks = []; renderMarks(); $("q").blur(); }
+});
+window.addEventListener("keydown", (e) => {
+  if (e.target.tagName === "INPUT") return;
+  if (e.key === "/") { e.preventDefault(); $("q").focus(); }
+  else if (e.key === "f") fit();
+  else if (e.key === "t") setSide("top");
+  else if (e.key === "b") setSide("bottom");
+  else if (e.key === "Escape") { clearHits(); clearTrace(); marks = []; renderMarks(); }
+});
+$("btnTop").onclick = () => setSide("top");
+$("btnBot").onclick = () => setSide("bottom");
+$("btnFit").onclick = fit;
+$("boardSel").onchange = (e) => loadBoard(e.target.value);
+window.addEventListener("resize", () => B && apply());
+
+(async () => {
+  const boards = await (await fetch("/api/boards")).json();
+  for (const b of boards) { const o = document.createElement("option"); o.value = b.name; o.textContent = b.title; $("boardSel").append(o); }
+  const want = decodeURIComponent(location.hash.slice(1));
+  await loadBoard(boards.some((b) => b.name === want) ? want : boards[0].name);
+  connect();
+})();
+</script>
+</body>
+</html>
